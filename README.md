@@ -2,7 +2,7 @@
 
 <img src="docs/media/banner.webp" alt="The Browsing of Isaac" width="100%">
 
-**The Binding of Isaac: Repentance+, playable in a browser tab. Fork**
+**The Binding of Isaac: Repentance+, playable in a browser tab. Forked Version**
 
 [![Play](https://img.shields.io/badge/PLAY-tboi.online-b03a2e?style=for-the-badge&labelColor=1d1512)](https://tboi.online)
 [![Stars](https://img.shields.io/github/stars/chiikabu/the-browsing-of-isaac?style=for-the-badge&logo=github&color=d7c9a7&labelColor=1d1512)](https://github.com/chiikabu/the-browsing-of-isaac/stargazers)
