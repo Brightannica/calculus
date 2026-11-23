@@ -288,7 +288,7 @@ if (portable) {
   index = JSON.parse(new TextDecoder().decode(indexBytes));
 } catch (e) { setStatus('loading', `instance_index.json: ${e.message}`); }
 const indexSize = new Map(index.map((e) => [e.p, e.s]));
-stages.module.total = sizeOf('boot.wasm');
+stages.module.total = sizeOf(WASM_MODULE);
 stages.image.total = sizeOf('isaac.segs.bin');
 stages.archives.total = EAGER_ARCHIVES.reduce((s, n) => s + (indexSize.get(`resources/packed/${n}`) || 0), 0)
   + index.filter((e) => e.p.startsWith('resources/scripts/')).reduce((s, e) => s + e.s, 0);
