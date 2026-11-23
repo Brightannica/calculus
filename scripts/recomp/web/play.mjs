@@ -227,29 +227,42 @@ if (portable && typeof portable.progress === 'function' && window.__isaacPortabl
   window.__isaacPortableData.onProgress = render;
 
 // Check actual APIs before starting the pipeline, not browser names or versions.
-// The native engine still requires JSPI and a WebGL 2 context.
+// The native engine requires either JSPI (Chrome/Edge) or Asyncify (all browsers)
+// for stack suspension, plus a WebGL 2 context.
 let runtimeError = '';
 let gpuRenderer = 'gpu?';   // read off the probe context below, for the frame-rate line's machine note
-if (typeof WebAssembly === 'undefined' || typeof WebAssembly.Suspending !== 'function'
-  || typeof WebAssembly.promising !== 'function') {
-  runtimeError = 'This game requires WebAssembly JavaScript Promise Integration (JSPI). Update your browser or use a browser with JSPI support.';
+let useAsyncify = false;
+
+const hasJSPI = typeof WebAssembly !== 'undefined' &&
+                typeof WebAssembly.Suspending === 'function' &&
+                typeof WebAssembly.promising === 'function';
+
+let gl = null;
+try { gl = document.createElement('canvas').getContext('webgl2'); } catch { /* unsupported or disabled */ }
+if (!gl) {
+  runtimeError = 'WebGL 2 is unavailable. Enable hardware graphics acceleration or use a browser and device that support WebGL 2.';
 } else {
-  let gl = null;
-  try { gl = document.createElement('canvas').getContext('webgl2'); } catch { /* unsupported or disabled */ }
-  if (!gl) runtimeError = 'WebGL 2 is unavailable. Enable hardware graphics acceleration or use a browser and device that support WebGL 2.';
-  else {
-    try {
-      const ext = gl.getExtension('WEBGL_debug_renderer_info');
-      if (ext) gpuRenderer = gl.getParameter(ext.UNMASKED_RENDERER_WEBGL);
-    } catch { /* the renderer string is only a note */ }
-    const lose = gl.getExtension('WEBGL_lose_context');
-    if (lose) lose.loseContext();
-  }
+  try {
+    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    if (ext) gpuRenderer = gl.getParameter(ext.UNMASKED_RENDERER_WEBGL);
+  } catch { /* the renderer string is only a note */ }
+  const lose = gl.getExtension('WEBGL_lose_context');
+  if (lose) lose.loseContext();
 }
+
+if (!hasJSPI) {
+  // No JSPI support (Safari, Firefox, older browsers) - will use Asyncify build
+  useAsyncify = true;
+  console.log('[isaac] JSPI not supported, using Asyncify build');
+}
+
 if (runtimeError) {
   showError('Browser not supported', runtimeError);
   throw new Error(runtimeError);
 }
+
+// The wasm module filename depends on the build profile
+const WASM_MODULE = useAsyncify ? 'boot-web-asyncify.wasm' : 'boot.wasm';
 
 // ---- manifest + index: the totals, the versions ------------------------------
 let manifest = null;
@@ -411,11 +424,12 @@ hooks.instantiateWasm = (info, receive) => {
   (async () => {
     const st = stages.module;
     st.received = 0; render();
+    const wasmRel = WASM_MODULE;  // 'boot.wasm' or 'boot-web-asyncify.wasm'
     if (portable) {
       // no server to stream from: the bytes are inline or in a chunk, so the
       // module is compiled from them directly (no instantiateStreaming, and so
       // none of round 40's code-cache benefit -- a portable build pays that)
-      const bytes = await portable.bytesFor('boot.wasm', 0, 0);
+      const bytes = await portable.bytesFor(wasmRel, 0, 0);
       st.received = bytes.length; st.done = true; render();
       const { instance, module } = await WebAssembly.instantiate(bytes, info);
       moduleReady = true; render();
@@ -423,8 +437,8 @@ hooks.instantiateWasm = (info, receive) => {
       receive(instance, module);
       return;
     }
-    const res = await fetch(rewrite('/boot.wasm'));
-    if (!res.ok) throw new Error(`boot.wasm: HTTP ${res.status}`);
+    const res = await fetch(rewrite(`/${wasmRel}`));
+    if (!res.ok) throw new Error(`${wasmRel}: HTTP ${res.status}`);
     // Round 40: the fetch's own Response goes to instantiateStreaming. V8 keeps
     // the optimised machine code of a module in the HTTP cache entry of the
     // response it was compiled from (a cacheable URL, >= 128 KB, streaming);

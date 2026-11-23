@@ -2,14 +2,14 @@
 """The shipping dist: one folder somebody can host, assembled from the bundle, the fast web module and the memory image.
 
   build  [--bundle DIR] [--module DIR] [--segs FILE] [--web DIR] [--dist DIR] [--copy]
-         [--keep-wasm-names] [--no-compress] [--no-brotli] [--brotli-quality N] [--gzip-level N] [--window-min BYTES]
+         [--asyncify-module DIR] [--keep-wasm-names] [--no-compress] [--no-brotli] [--brotli-quality N] [--gzip-level N] [--window-min BYTES]
          assemble DIST (default .scratch/game-dist): play.html + play.mjs + boot_web.mjs at the root,
-         boot.mjs / boot.wasm / isaac.segs.bin (copied, never linked: build_boot.py relinks the module
-         in place while a dist may be in use; only the copied Wasm's name custom section is stripped
-         unless --keep-wasm-names is set), the bundle's files under instance/ (hard links, or
-         copies with --copy), instance_index.json in the shape boot_web.mjs consumes, precompressed
-         siblings (.br / .gz) for files of at least 1 KiB that compress, dist.json (every file
-         with its size, sha256 and encodings) and the size table
+         boot.mjs / boot.wasm / boot-web-asyncify.wasm / isaac.segs.bin (copied, never linked:
+         build_boot.py relinks the module in place while a dist may be in use; only the copied
+         Wasm's name custom section is stripped unless --keep-wasm-names is set), the bundle's
+         files under instance/ (hard links, or copies with --copy), instance_index.json in the
+         shape boot_web.mjs consumes, precompressed siblings (.br / .gz) for files of at least
+         1 KiB that compress, dist.json (every file with its size, sha256 and encodings) and the size table
   check  DIST [--quick]   re-verify a dist against dist.json: every file present with its size and
          hash, every sibling present and decoding to its source (--quick: sizes only), nothing extra,
          the index matching instance/, the totals adding up
@@ -17,7 +17,8 @@
 
 What ships and why (docs/recomp-architecture.md 21.49): the page (play.html, play.mjs) and the
 pipeline it imports (boot_web.mjs) are the three files of scripts/recomp/web the browser needs; the
-module is build_boot.py --web --fast (boot.mjs + boot.wasm); the memory image is the guest's
+module is build_boot.py --web --fast (boot.mjs + boot.wasm); the Asyncify fallback module is
+build_boot.py --web-asyncify --fast (boot-web-asyncify.wasm); the memory image is the guest's
 .data/.rdata (isaac.segs.bin); the instance is the round-28 bundle (bundle.py), served under
 instance/ exactly as run_web.mjs serves an instance dir, with the same index (a JSON array of
 {p, s}: relative path, size) the page registers lazily.
@@ -61,6 +62,7 @@ INSTANCE_DIR = "instance"
 PAGE_FILES = ("play.html", "play.mjs", "boot_web.mjs", "gamepad.mjs", "menu_overlay.mjs", "zip.mjs", "mod_browser.mjs", "mods.mjs", "touch_input.mjs", "touch_game.mjs", "touch_controls.mjs")
 TRAIL_NAME = "boot-trail.json"       # round 59: the boot trail a drive_boot.mjs run left, shipped for first visits (--trail)
 MODULE_FILES = ("boot.mjs", "boot.wasm")
+ASYNCIFY_MODULE_FILE = "boot-web-asyncify.wasm"
 SEGS_NAME = "isaac.segs.bin"
 MIN_COMPRESS = 1 << 10            # small text and archives benefit too; probe and final size still gate siblings
 BIG_ROW = 5_000_000               # the size table lists every file above this on its own row
@@ -393,6 +395,19 @@ def cmd_build(args) -> int:
     except ValueError as ex:
         print("invalid WebAssembly module: %s" % ex, file=sys.stderr)
         return 1
+    # Optional Asyncify fallback module for Safari/Firefox (no JSPI)
+    asyncify_dir = getattr(args, "asyncify_module", "")
+    if asyncify_dir:
+        asyncify_wasm = os.path.join(asyncify_dir, "boot.wasm")
+        if os.path.isfile(asyncify_wasm):
+            try:
+                add(ASYNCIFY_MODULE_FILE, asyncify_wasm, "module", link=False)
+            except ValueError as ex:
+                print("invalid Asyncify WebAssembly module: %s" % ex, file=sys.stderr)
+                return 1
+        else:
+            print("asyncify-module: boot.wasm not found in %s" % asyncify_dir, file=sys.stderr)
+            return 1
     add(SEGS_NAME, segs, "image", link=False)
     bundle_files = walk_files(bundle_dir)
     for rel in sorted(bundle_files):
@@ -624,6 +639,7 @@ def main(argv=None) -> int:
     p = sub.add_parser("build", help="assemble a dist")
     p.add_argument("--bundle", default=DEFAULTS["bundle"], help="the bundle dir (bundle.py build), default .scratch/game-bundle")
     p.add_argument("--module", default=DEFAULTS["module"], help="the fast web module dir, default output/recomp/lift/boot-web-fast")
+    p.add_argument("--asyncify-module", default="", help="optional Asyncify web module dir (build_boot.py --web-asyncify --fast) for Safari/Firefox, copied as boot-web-asyncify.wasm")
     p.add_argument("--segs", default=DEFAULTS["segs"], help="the memory image, default output/recomp/host/isaac.segs.bin")
     p.add_argument("--web", default=DEFAULTS["web"], help="where play.html, play.mjs and boot_web.mjs live")
     p.add_argument("--dist", default=DEFAULTS["dist"], help="the output folder, default .scratch/game-dist")

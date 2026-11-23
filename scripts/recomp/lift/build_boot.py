@@ -221,7 +221,11 @@ def main():
                     help="browser profile: host objects rebuilt as .web.o with -DISAAC_WEB=1 "
                          "(real WebGL2 GL backend, EM_JS bridges), link with -sENVIRONMENT=web, "
                          "MEMFS (no NODERAWFS), FS/ENV exported; output in boot-web/. Driven by "
-                         "scripts/recomp/web/run_web.mjs under Playwright.")
+                         "scripts/recomp/web/run_web.mjs under Playwright. Uses JSPI (Chrome/Edge only).")
+    ap.add_argument("--web-asyncify", action="store_true",
+                    help="browser profile (Safari/Firefox compatible): same as --web but uses Asyncify "
+                         "instead of JSPI for stack suspension. Output in boot-web-asyncify/. Slower but "
+                         "works in all browsers with WebAssembly and WebGL2 support.")
     ap.add_argument("--initial-memory", type=lambda v: int(v, 0), default=0,
                     help="override -sINITIAL_MEMORY (bytes). Growing the wasm "
                          "memory reallocates and copies the whole heap, which "
@@ -249,17 +253,15 @@ def main():
         LDFLAGS += ["-sINITIAL_MEMORY=%d" % args.initial_memory]
         print("link : INITIAL_MEMORY overridden to %d bytes (%.0f MiB)"
               % (args.initial_memory, args.initial_memory / 1048576.0))
-    if args.web:
-        BOOT_OUT = OUT_LIFT / "boot-web"
+    if args.web or args.web_asyncify:
+        is_asyncify = args.web_asyncify
+        BOOT_OUT = OUT_LIFT / ("boot-web-asyncify" if is_asyncify else "boot-web")
         HOST_CFLAGS = HOST_CFLAGS + ["-DISAAC_WEB=1"]
         host_obj_suffix = ".web.o"
         LDFLAGS = [f for f in LDFLAGS
                    if f not in ("-sENVIRONMENT=node", "-sNODERAWFS=1",
                                 "-sEXPORTED_RUNTIME_METHODS=HEAPU8,HEAP32")]
-        # Round 25: JSPI. The frame present suspends the wasm stack once per
-        # frame (emscripten_sleep(0)) so the page's event loop runs; the exports
-        # that may be on the stack at that moment return promises. JSPI_EXPORTS
-        # names WASM exports (isaac_run_main, not the JS-side _isaac_run_main).
+        # Stack suspension: JSPI (Chrome/Edge) or Asyncify (all browsers).
         # A suspension cannot cross a JS frame, so setjmp/longjmp must be the
         # Wasm-EH implementation rather than the invoke_* trampolines -- in the
         # host TUs, in dispatch_tbl.c (compiled below with the lifted flags) and
@@ -267,10 +269,18 @@ def main():
         SJLJ_CFLAGS = ["-sSUPPORT_LONGJMP=wasm"]
         HOST_CFLAGS = HOST_CFLAGS + SJLJ_CFLAGS
         LUA_LIB = LUA_LIB_WASM_SJLJ
-        # Round 56: the archive window read may answer with a promise (the
-        # page's reader Worker), so it suspends the stack like the yield does.
-        LDFLAGS += ["-sJSPI", "-sJSPI_EXPORTS=isaac_run_main,isaac_run_boot",
-                    "-sJSPI_IMPORTS=emscripten_sleep,__asyncjs__isaac_yield_js,isaac_fs_lazy_pread_js", "-sSUPPORT_LONGJMP=wasm"]
+        # The archive window read may answer with a promise (the page's reader
+        # Worker), so it suspends the stack like the yield does.
+        if is_asyncify:
+            # Asyncify: works in all browsers, no JSPI needed.
+            # EM_ASYNC_JS functions work with Asyncify automatically.
+            LDFLAGS += ["-sASYNCIFY",
+                        "-sASYNCIFY_IMPORTS=emscripten_sleep,isaac_yield_js,isaac_fs_lazy_pread_js,isaac_wait_js",
+                        "-sSUPPORT_LONGJMP=wasm"]
+        else:
+            # JSPI: Chrome/Edge only, better performance.
+            LDFLAGS += ["-sJSPI", "-sJSPI_EXPORTS=isaac_run_main,isaac_run_boot",
+                        "-sJSPI_IMPORTS=emscripten_sleep,__asyncjs__isaac_yield_js,isaac_fs_lazy_pread_js", "-sSUPPORT_LONGJMP=wasm"]
         LDFLAGS += ["-sENVIRONMENT=web", "-sFORCE_FILESYSTEM=1",
                     "-sEXPORTED_RUNTIME_METHODS=HEAPU8,HEAP32,FS,ENV",
                     "-sMAX_WEBGL_VERSION=2", "-sMIN_WEBGL_VERSION=2",
@@ -286,7 +296,8 @@ def main():
         # directory change. Round 20 measured the speed profile 20x faster in
         # gameplay, which is what makes a browser demo of more than a few
         # hundred frames practical at all.
-        BOOT_OUT = OUT_LIFT / ("boot-web-fast" if args.web else "boot-fast")
+        is_web = args.web or args.web_asyncify
+        BOOT_OUT = OUT_LIFT / (("boot-web-asyncify-fast" if args.web_asyncify else "boot-web-fast") if is_web else "boot-fast")
         LIFT_CFLAGS = ["-O3", "-w", "-DRECOMP_MEM_CHECK=0"]
         # Round 58: the host TUs at -O3 too. They were -O1 beside -O3 lifted
         # code, and the host is a quarter to a third of the loading window
