@@ -314,16 +314,29 @@ static uint32_t g_win_tick, g_win_fills, g_win_hits;
 EM_JS(int, isaac_fs_lazy_pread_avail, (void), {
     return (typeof Module.isaacLazyPread === "function") ? 1 : 0;
 });
+#ifdef ISAAC_WEB
+/* EM_ASYNC_JS for both JSPI and Asyncify: the function can return a promise
+ * that suspends the wasm stack. With JSPI (build_boot.py JSPI_IMPORTS) the
+ * stack is parked natively; with Asyncify (build_boot.py ASYNCIFY_IMPORTS)
+ * the stack is unwound and rewound. */
+EM_ASYNC_JS(int, isaac_fs_lazy_pread_js, (const char *src, uint8_t *dst, uint32_t off, uint32_t len), {
+    if (typeof Module.isaacLazyPread !== "function") return -1;
+    var s = "";
+    for (var i = src; HEAPU8[i]; i++) s += String.fromCharCode(HEAPU8[i]);
+    var n = Module.isaacLazyPread(s, dst, off, len);
+    /* A promise suspends the wasm stack until the page's reader Worker has
+     * put the bytes in place; a number is the answer at once. */
+    return (typeof n === "number" || (n && typeof n.then === "function")) ? n : -1;
+});
+#else
 EM_JS(int, isaac_fs_lazy_pread_js, (const char *src, uint8_t *dst, uint32_t off, uint32_t len), {
     if (typeof Module.isaacLazyPread !== "function") return -1;
     var s = "";
     for (var i = src; HEAPU8[i]; i++) s += String.fromCharCode(HEAPU8[i]);
     var n = Module.isaacLazyPread(s, dst, off, len);
-    /* Round 56: a promise suspends the wasm stack (this is a JSPI import,
-     * build_boot.py JSPI_IMPORTS) until the page's reader Worker has put the
-     * bytes in place; a number is the answer at once. */
     return (typeof n === "number" || (n && typeof n.then === "function")) ? n : -1;
 });
+#endif
 #else
 static int isaac_fs_lazy_pread_avail(void) { return 0; }
 static int isaac_fs_lazy_pread_js(const char *src, uint8_t *dst, uint32_t off, uint32_t len) {
