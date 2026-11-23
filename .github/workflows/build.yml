@@ -18,6 +18,20 @@ jobs:
           version: 'latest'
           actions-cache-folder: 'emsdk-cache'
 
+      - name: Check for lifted tree (required for build)
+        run: |
+          if [ ! -d "output/recomp/lift/gu" ] && [ ! -d "output/recomp/lift/full" ]; then
+            echo "ERROR: Lifted tree not found at output/recomp/lift/{gu,full}"
+            echo "This requires the Ghidra decompilation pipeline (run locally):"
+            echo "  1. Ghidra headless export (~50 min) -> output/recomp/"
+            echo "  2. SLEIGH lifter -> output/recomp/lift/gu/ (21k C files)"
+            echo "  3. build_wasm.py -> compile lifted C to .o files"
+            echo ""
+            echo "This workflow only does step 4 (linking)."
+            echo "Run the full pipeline locally, then push output/recomp/lift/ or use a pre-built artifact."
+            exit 1
+          fi
+
       - name: Build JSPI module (Chrome/Edge)
         run: |
           python scripts/recomp/lift/build_boot.py --web --fast --dir output/recomp/lift
