@@ -1,0 +1,117 @@
+name: Build Web Dist (Requires Pre-built Lifted Tree)
+
+on:
+  workflow_dispatch:
+    inputs:
+      lifted-tree-url:
+        description: 'URL to pre-built output/recomp/lift/ tarball (from release or external storage)'
+        required: false
+        type: string
+      use-release:
+        description: 'Download lifted tree from latest GitHub release'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup emscripten
+        uses: mymindstorm/setup-emscripten@v14
+        with:
+          version: 'latest'
+          actions-cache-folder: 'emsdk-cache'
+
+      - name: Download pre-built lifted tree (if provided)
+        if: inputs.lifted-tree-url != '' || inputs.use-release == true
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.use-release }}" = "true" ]; then
+            echo "Fetching latest release assets..."
+            LATEST_RELEASE=$(gh api repos/${{ github.repository }}/releases/latest --jq '.assets[] | select(.name | endswith("lift.tar.gz")) | .browser_download_url' 2>/dev/null | head -1)
+            if [ -z "$LATEST_RELEASE" ]; then
+              echo "No lift.tar.gz found in latest release"
+              exit 1
+            fi
+            LIFTED_URL="$LATEST_RELEASE"
+          else
+            LIFTED_URL="${{ inputs.lifted-tree-url }}"
+          fi
+          echo "Downloading from $LIFTED_URL"
+          curl -L "$LIFTED_URL" | tar -xz -C output/recomp/
+          echo "Lifted tree extracted to output/recomp/lift/"
+
+      - name: Verify lifted tree exists
+        run: |
+          if [ ! -d "output/recomp/lift/gu" ] && [ ! -d "output/recomp/lift/full" ]; then
+            echo "ERROR: Lifted tree not found at output/recomp/lift/{gu,full}"
+            echo ""
+            echo "This workflow requires a pre-built lifted tree from the local Ghidra pipeline:"
+            echo "  1. Run full pipeline locally (Ghidra export + SLEIGH lifter + build_wasm.py)"
+            echo "  2. Package output/recomp/lift/ as lift.tar.gz"
+            echo "  3. Upload to a release or file host"
+            echo "  4. Re-run workflow with lifted-tree-url or use-release=true"
+            echo ""
+            echo "The repo only contains source + build scripts. The lifted C tree (21k files)"
+            echo "is a build artifact, not source code."
+            exit 1
+          fi
+          echo "Lifted tree found: $(ls -d output/recomp/lift/gu 2>/dev/null || echo output/recomp/lift/full)"
+
+      - name: Build JSPI module (Chrome/Edge)
+        run: |
+          python scripts/recomp/lift/build_boot.py --web --fast --dir output/recomp/lift
+
+      - name: Build Asyncify module (Safari/Firefox)
+        run: |
+          python scripts/recomp/lift/build_boot.py --web-asyncify --fast --dir output/recomp/lift
+
+      - name: Create dist with both modules
+        run: |
+          python scripts/recomp/assets/ship.py build \
+            --module output/recomp/lift/boot-web-fast \
+            --asyncify-module output/recomp/lift/boot-web-asyncify-fast \
+            --segs output/recomp/host/isaac.segs.bin \
+            --web scripts/recomp/web \
+            --dist .scratch/game-dist
+
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: game-dist
+          path: .scratch/game-dist/
+          retention-days: 7
+
+  # Documentation job - always runs, shows requirements
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print build requirements
+        run: |
+          cat << 'EOF'
+          ╔══════════════════════════════════════════════════════════════════╗
+          ║  GITHUB ACTIONS BUILD - REQUIREMENTS                            ║
+          ╠══════════════════════════════════════════════════════════════════╣
+          ║ This workflow CANNOT run the full build in CI.                 ║
+          ║                                                                  ║
+          ║ FULL PIPELINE (run locally):                                    ║
+          ║   1. Ghidra headless export (~50 min) → output/recomp/         ║
+          ║   2. SLEIGH lifter → output/recomp/lift/gu/ (21k C files)      ║
+          ║   3. build_wasm.py (parallel emcc) → compile .o files          ║
+          ║   4. build_boot.py --web --fast → link boot.wasm  ← this job   ║
+          ║                                                                  ║
+          ║ CI ONLY DOES STEP 4.                                            ║
+          ║                                                                  ║
+          ║ TO USE CI:                                                      ║
+          ║   A. Run steps 1-3 locally                                      ║
+          ║   B. tar -czf lift.tar.gz output/recomp/lift/                  ║
+          ║   C. Upload to GitHub Release                                   ║
+          ║   D. Re-run workflow with use-release=true                     ║
+          ║                                                                  ║
+          ║ OR provide lifted-tree-url to any accessible .tar.gz           ║
+          ╚══════════════════════════════════════════════════════════════════╝
+          EOF
