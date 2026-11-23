@@ -1,0 +1,43 @@
+name: Build Web Dist
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, kilo/*]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup emscripten
+        uses: mymindstorm/setup-emscripten@v14
+        with:
+          version: 'latest'
+          actions-cache-folder: 'emsdk-cache'
+
+      - name: Build JSPI module (Chrome/Edge)
+        run: |
+          python scripts/recomp/lift/build_boot.py --web --fast --dir output/recomp/lift
+
+      - name: Build Asyncify module (Safari/Firefox)
+        run: |
+          python scripts/recomp/lift/build_boot.py --web-asyncify --fast --dir output/recomp/lift
+
+      - name: Create dist with both modules
+        run: |
+          python scripts/recomp/assets/ship.py build \
+            --module output/recomp/lift/boot-web-fast \
+            --asyncify-module output/recomp/lift/boot-web-asyncify-fast \
+            --segs output/recomp/host/isaac.segs.bin \
+            --web scripts/recomp/web \
+            --dist .scratch/game-dist
+
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: game-dist
+          path: .scratch/game-dist/
+          retention-days: 7
